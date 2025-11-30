@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Mini Pac‑Man — Mobile</title>
+  <style>
+    :root{--bg:#000;--wall:#223;--pellet:#ffd700;--pac:#ffeb3b;--ghost1:#ff3b3b;--ghost2:#3b9bff;--ghost3:#9b3bff}
+    html,body{height:100%;margin:0;background:var(--bg);-webkit-user-select:none;-ms-user-select:none;user-select:none;}
+    #gameWrap{display:flex;flex-direction:column;height:100vh;align-items:center;justify-content:center;padding:6px;box-sizing:border-box}
+    canvas{background:#000;border-radius:12px;touch-action:none}
+    .ui{width:100%;max-width:720px;display:flex;justify-content:space-between;align-items:center;margin-top:8px;color:#eee;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    .left,.right{display:flex;gap:10px;align-items:center}
+    .btn{background:#111;border:1px solid #333;padding:8px 12px;border-radius:8px}
+    .controls{position:relative;width:100%;max-width:720px;display:flex;justify-content:center;margin-top:8px}
+    .joy{position:relative;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center}
+    .dpad{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;}
+    .padCell{display:flex;align-items:center;justify-content:center}
+    .padButton{width:76px;height:76px;border-radius:16px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.03);}
+    .padButton:active{transform:scale(.96)}
+    .msg{color:#ddd;font-size:13px}
+    @media (max-width:420px){.joy{width:180px;height:180px}.padButton{width:60px;height:60px;border-radius:12px}}
+  </style>
+</head>
+<body>
+  <div id="gameWrap">
+    <canvas id="c"></canvas>
+
+    <div class="ui">
+      <div class="left">
+        <div class="btn" id="startBtn">Start</div>
+        <div class="btn" id="resetBtn">Reset</div>
+      </div>
+      <div class="msg" id="status">Score: 0 • Lives: 3</div>
+      <div class="right">
+        <div class="msg">Swipe or use d-pad</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="joy" id="joy">
+        <div class="dpad">
+          <div class="padCell"></div>
+          <div class="padCell"><div class="padButton" data-dir="up">▲</div></div>
+          <div class="padCell"></div>
+
+          <div class="padCell"><div class="padButton" data-dir="left">◀</div></div>
+          <div class="padCell"></div>
+          <div class="padCell"><div class="padButton" data-dir="right">▶</div></div>
+
+          <div class="padCell"></div>
+          <div class="padCell"><div class="padButton" data-dir="down">▼</div></div>
+          <div class="padCell"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Simple mobile-friendly Pac-Man-like game
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    // Configuration
+    const TILE = 18; // base tile size (will scale)
+    const MAP = [
+      // 0 empty, 1 wall, 2 pellet, 3 power pellet
+      [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+      [1,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,2,2,1],
+      [1,2,1,1,1,2,2,1,2,1,1,1,1,1,2,1,1,2,1],
+      [1,3,1,0,1,2,2,2,2,2,2,2,0,1,2,1,3,2,1],
+      [1,2,1,0,1,2,1,1,1,1,1,1,0,1,2,1,2,2,1],
+      [1,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,2,2,1],
+      [1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1]
+    ];
+
+    let scale = 1;
+    let tileSize = TILE;
+    let cols = MAP[0].length;
+    let rows = MAP.length;
+
+    function resize() {
+      // Fit to viewport comfortably for phones
+      const maxWidth = Math.min(window.innerWidth - 12, 720);
+      // prefer square game area
+      tileSize = Math.floor(maxWidth / cols);
+      scale = tileSize / TILE;
+      canvas.width = cols * tileSize;
+      canvas.height = rows * tileSize;
+      canvas.style.width = canvas.width + 'px';
+      canvas.style.height = canvas.height + 'px';
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Game state
+    let gameMap = [];
+    let pac = {x:1.5,y:1.5,dir:0,nextDir:0,speed:4,rad:tileSize*0.4/layerScale()};
+    let ghosts = [];
+    let score = 0;
+    let lives = 3;
+    let running = false;
+    let lastTime = 0;
+
+    function layerScale(){return tileSize/TILE}
+
+    function cloneMap(){gameMap = MAP.map(r => r.slice());}
+
+    function resetGame(){
+      cloneMap();
+      score = 0; lives = 3;
+      pac = {x:1.5,y:1.5,dir:0,nextDir:0,speed:4};
+      ghosts = [
+        {x:9.5,y:3.5,color:'#ff3b3b',dir:2,home:{x:9.5,y:3.5}},
+        {x:8.5,y:3.5,color:'#3b9bff',dir:2,home:{x:8.5,y:3.5}},
+        {x:10.5,y:3.5,color:'#9b3bff',dir:2,home:{x:10.5,y:3.5}}
+      ];
+      updateStatus();
+    }
+
+    function updateStatus(){ statusEl.textContent = `Score: ${score} • Lives: ${lives}` }
+
+    function startGame(){ if(!running){ running = true; lastTime = performance.now(); requestAnimationFrame(loop);} }
+    function stopGame(){ running = false; }
+
+    // Simple helpers
+    function isWall(cx,cy){
+      const ix = Math.floor(cx);
+      const iy = Math.floor(cy);
+      if(iy<0||iy>=rows||ix<0||ix>=cols) return true;
+      return gameMap[iy][ix] === 1;
+    }
+
+    function eatPelletAt(x,y){
+      const ix = Math.floor(x);
+      const iy = Math.floor(y);
+      if(gameMap[iy] && (gameMap[iy][ix] === 2 || gameMap[iy][ix]===3)){
+        if(gameMap[iy][ix]===2) score +=10;
+        else score +=50;
+        gameMap[iy][ix]=0;
+        updateStatus();
+      }
+    }
+
+    function signDir(d){ // 0 none, 1 up,2 right,3 down,4 left
+      if(d===1) return {x:0,y:-1};
+      if(d===2) return {x:1,y:0};
+      if(d===3) return {x:0,y:1};
+      if(d===4) return {x:-1,y:0};
+      return {x:0,y:0};
+    }
+
+    // Movement with grid collision
+    function canMoveTo(x,y){
+      // check small buffer radius to avoid clipping through corners
+      const buffer = 0.25;
+      // check four sample points around center
+      const checks = [ [x-buffer,y-buffer],[x+buffer,y-buffer],[x-buffer,y+buffer],[x+buffer,y+buffer] ];
+      for(let p of checks){ if(isWall(p[0],p[1])) return false; }
+      return true;
+    }
+
+    function tryTurn(p,obj){
+      if(obj.nextDir===0) return false;
+      const d = signDir(obj.nextDir);
+      const nx = obj.x + d.x*0.2;
+      const ny = obj.y + d.y*0.2;
+      if(canMoveTo(nx,ny)){ obj.dir = obj.nextDir; obj.nextDir = 0; return true; }
+      return false;
+    }
+
+    function movePlayer(dt){
+      // dt in seconds
+      // attempt to turn first
+      tryTurn(pac,pac);
+      const d = signDir(pac.dir);
+      if(pac.dir!==0){
+        const nx = pac.x + d.x * pac.speed * dt;
+        const ny = pac.y + d.y * pac.speed * dt;
+        if(canMoveTo(nx,ny)){
+          pac.x = nx; pac.y = ny;
+        } else {
+          // stop on collision
+        }
+      }
+      eatPelletAt(pac.x,pac.y);
+    }
+
+    function moveGhosts(dt){
+      for(let g of ghosts){
+        // naive wandering AI: try current dir, else pick random
+        const d = signDir(g.dir);
+        let nx = g.x + d.x * 2 * dt;
+        let ny = g.y + d.y * 2 * dt;
+        if(!canMoveTo(nx,ny)){
+          // pick a new direction different from opposite
+          const options = [1,2,3,4].filter(x=>x !== oppositeDir(g.dir));
+          // prefer towards player sometimes
+          if(Math.random() < 0.3){
+            const dx = pac.x - g.x; const dy = pac.y - g.y;
+            const preferred = Math.abs(dx) > Math.abs(dy) ? (dx>0?2:4) : (dy>0?3:1);
+            if(options.includes(preferred)) g.dir = preferred; else g.dir = options[Math.floor(Math.random()*options.length)];
+          } else g.dir = options[Math.floor(Math.random()*options.length)];
+        } else {
+          g.x = nx; g.y = ny;
+        }
+      }
+    }
+
+    function oppositeDir(d){ if(d===1) return 3; if(d===3) return 1; if(d===2) return 4; if(d===4) return 2; return 0; }
+
+    function checkCollisions(){
+      for(let g of ghosts){
+        const dx = g.x - pac.x; const dy = g.y - pac.y; if(Math.hypot(dx,dy) < 0.6){
+          // collision
+          lives -=1; updateStatus();
+          if(lives<=0){ running=false; alert('Game Over! Score: '+score); }
+          else {
+            // reset positions
+            pac.x = 1.5; pac.y = 1.5; pac.dir=0; pac.nextDir=0;
+            ghosts.forEach((gh,i)=>{ gh.x = gh.home.x; gh.y = gh.home.y; gh.dir = 2; });
+          }
+          break;
+        }
+      }
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      // draw map
+      for(let y=0;y<rows;y++){
+        for(let x=0;x<cols;x++){
+          const v = gameMap[y][x];
+          const px = x*tileSize; const py = y*tileSize;
+          if(v===1){
+            ctx.fillStyle = 'rgb(34,40,50)';
+            ctx.fillRect(px,py,tileSize,tileSize);
+            // small inner border
+            ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.strokeRect(px+1,py+1,tileSize-2,tileSize-2);
+          } else {
+            // draw pellet
+            if(v===2){ ctx.beginPath(); ctx.fillStyle='gold'; ctx.arc(px+tileSize/2,py+tileSize/2,Math.max(2,tileSize*0.08),0,Math.PI*2); ctx.fill(); }
+            if(v===3){ ctx.beginPath(); ctx.fillStyle='white'; ctx.arc(px+tileSize/2,py+tileSize/2,Math.max(5,tileSize*0.18),0,Math.PI*2); ctx.fill(); }
+          }
+        }
+      }
+
+      // draw pacman
+      ctx.save();
+      const pacPx = pac.x * tileSize; const pacPy = pac.y * tileSize;
+      ctx.translate(pacPx,pacPy);
+      // simple chomping animation
+      const t = performance.now()/120; const mouth = Math.abs(Math.sin(t))*0.45;
+      let angle = 0;
+      if(pac.dir===1) angle = -Math.PI/2; if(pac.dir===2) angle = 0; if(pac.dir===3) angle = Math.PI/2; if(pac.dir===4) angle = Math.PI;
+      ctx.rotate(angle);
+      ctx.beginPath(); ctx.fillStyle='#ffeb3b'; ctx.moveTo(0,0); ctx.arc(0,0,tileSize*0.45,-mouth*Math.PI, mouth*Math.PI); ctx.closePath(); ctx.fill();
+      ctx.restore();
+
+      // draw ghosts
+      for(let g of ghosts){
+        const gx = g.x*tileSize; const gy = g.y*tileSize;
+        ctx.save(); ctx.translate(gx,gy);
+        ctx.beginPath(); ctx.fillStyle = g.color; ctx.arc(0, -tileSize*0.08, tileSize*0.28, Math.PI, 0, false); ctx.fill();
+        ctx.fillRect(-tileSize*0.28, -tileSize*0.08, tileSize*0.56, tileSize*0.45);
+        // eyes
+        ctx.beginPath(); ctx.fillStyle='#fff'; ctx.arc(-tileSize*0.12, -tileSize*0.05, tileSize*0.08,0,Math.PI*2); ctx.arc(tileSize*0.12, -tileSize*0.05, tileSize*0.08,0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.fillStyle='#000'; ctx.arc(-tileSize*0.12, -tileSize*0.05, tileSize*0.04,0,Math.PI*2); ctx.arc(tileSize*0.12, -tileSize*0.05, tileSize*0.04,0,Math.PI*2); ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function loop(now){
+      if(!running) return;
+      const dt = Math.min(0.05,(now - lastTime)/1000);
+      lastTime = now;
+      movePlayer(dt);
+      moveGhosts(dt);
+      checkCollisions();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    // Input handling
+    let touchStart = null;
+    canvas.addEventListener('touchstart', (e)=>{ e.preventDefault(); const t = e.touches[0]; touchStart = {x:t.clientX,y:t.clientY}; });
+    canvas.addEventListener('touchmove', (e)=>{ e.preventDefault(); });
+    canvas.addEventListener('touchend', (e)=>{
+      if(!touchStart) return; const t = e.changedTouches[0]; const dx = t.clientX - touchStart.x; const dy = t.clientY - touchStart.y; const adx = Math.abs(dx); const ady = Math.abs(dy);
+      if(Math.max(adx,ady) < 20) return; // tap
+      if(adx > ady){ // horizontal
+        pac.nextDir = dx>0?2:4;
+      } else pac.nextDir = dy>0?3:1;
+      touchStart = null;
+    });
+
+    // D-pad buttons
+    document.querySelectorAll('.padButton').forEach(b=>{
+      b.addEventListener('click', ()=>{ const dir = b.dataset.dir; if(dir==='up') pac.nextDir=1; if(dir==='right') pac.nextDir=2; if(dir==='down') pac.nextDir=3; if(dir==='left') pac.nextDir=4; startGame(); });
+    });
+
+    // Keyboard support for desktop
+    window.addEventListener('keydown',(e)=>{
+      if(e.key==='ArrowUp' || e.key==='w') pac.nextDir=1;
+      if(e.key==='ArrowRight' || e.key==='d') pac.nextDir=2;
+      if(e.key==='ArrowDown' || e.key==='s') pac.nextDir=3;
+      if(e.key==='ArrowLeft' || e.key==='a') pac.nextDir=4;
+      startGame();
+    });
+
+    startBtn.addEventListener('click', ()=>{ startGame(); });
+    resetBtn.addEventListener('click', ()=>{ resetGame(); draw(); });
+
+    // initialize
+    resetGame(); draw();
+
+    // make sure touch gestures don't scroll on mobile
+    document.body.addEventListener('touchmove', function(e){ e.preventDefault(); }, {passive:false});
+  </script>
+</body>
+</html>
